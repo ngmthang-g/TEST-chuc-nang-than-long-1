@@ -58,13 +58,31 @@ This creates two undesirable properties at once:
 - Modified: `src/controller.cpp`, `CMakeLists.txt`, `README.md`, `PROJECT_KNOWLEDGE.md`.
 - Added: `CHANGELOG.md`, click-engine/history/decision/reference docs, GitHub Actions build workflow.
 
-## H. Build / CI
-- Local: NOT BUILT (Windows-only target; current authoring environment is Linux).
-- CI: use repository GitHub Actions Windows x64 workflow.
+## H. Build / CI History
+- Local: NOT BUILT (Windows-only target; authoring environment is Linux).
+- First CI validation attempt: source v0.1.5 reconstruction PASS, but final v0.1.6 SHA gate failed because Windows `git apply` materialized CRLF. This was a pipeline normalization issue, not a C++ source divergence.
+- Correction: normalize patched controller back to canonical LF before final SHA verification.
+- Final validation run: GitHub Actions `32376966981`.
+- Exact v0.1.5 controller reconstruction: **PASS**.
+- v0.1.6 patch + final controller SHA verification: **PASS**.
+- Configure Windows x64: **PASS**.
+- Build Release: **PASS**.
+- Package runtime/source: **PASS**.
+- Upload artifact: **PASS**.
+- Artifact: `ThanLongAutoPK-v0.1.6` / artifact ID `9409430656`.
+- Runtime ZIP SHA256: `3081db1ccfa35fe699e2b935a108ce6f793d748f9a7d1b635056f2299d56ec76`.
+- Source ZIP SHA256: `27b98230f115b1f352c9bbcee5e6eef56a92585656e98ac2cd256d6a3ace0e60`.
 
 ## I. Runtime Result
 - RUNTIME: **UNTESTED**.
+- BUILD PASS does not establish game-runtime behavior.
 - Awaiting test: overlapping sequences on 2+ clients, manual mouse interruption, periodic Confirm due during another sequence, F4/STOP mid-sequence.
+
+## J. Failed Attempt / Correction
+- Approach/step: final SHA verification immediately after Windows `git apply`.
+- Result: failed with hash `f2e899d2ce225f422e8f086d330d5d66a3b2b78df6a71ff9f38c071d4d40df17`.
+- Root cause: CRLF materialization on Windows; normalized LF source hashes to the expected `8ec45d5762d5731cbe6d043aa8e28859a80dbca9bc10deac91458b9e911f919f`.
+- Lesson: canonicalize line endings before source-integrity SHA gates in Windows CI.
 
 ## M. Handoff
 If runtime reports cursor conflict, inspect lease acquisition/release logs first. Do not reintroduce scheduler-wide freeze. If a sequence stalls, inspect the row coordinate/guard and ensure failure releases lease without advancing the sequence index.
