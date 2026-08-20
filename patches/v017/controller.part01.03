@@ -1,0 +1,4 @@
++        a->afterDelayMs = std::clamp(_wtoi(GetText(actionAfter_).c_str()), 0, 60000);
++        a->repeat = std::clamp(_wtoi(GetText(actionRepeat_).c_str()), 1, 100);
++        a->repeatGapMs = std::clamp(_wtoi(GetText(actionRepeatGap_).c_str()), 0, 60000);
++        a->atomicLease = SendMessageW(actionAtomic_, BM_GETCHECK, 0, 0) == BST_CHECKED;
