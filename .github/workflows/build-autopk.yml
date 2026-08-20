@@ -70,6 +70,8 @@ jobs:
             throw "v0.1.6 patch mismatch: $patchHash"
           }
           git apply --directory=generated/autopk 'v016-controller.patch'
+          $controllerText = [IO.File]::ReadAllText('generated/autopk/src/controller.cpp').Replace("`r`n", "`n").Replace("`r", "`n")
+          [IO.File]::WriteAllText('generated/autopk/src/controller.cpp', $controllerText, $utf8NoBom)
           $controllerHash = (Get-FileHash 'generated/autopk/src/controller.cpp' -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($controllerHash -ne '8ec45d5762d5731cbe6d043aa8e28859a80dbca9bc10deac91458b9e911f919f') {
             throw "v0.1.6 controller mismatch: $controllerHash"
