@@ -1,0 +1,392 @@
+--- a/src/controller.cpp
++++ b/src/controller.cpp
+@@ -11,13 +11,14 @@
+ #include <algorithm>
+ #include <memory>
+ #include <utility>
++#include <initializer_list>
+ #include "protocol.h"
+ 
+ using namespace cleanroute;
+ 
+ namespace {
+ 
+-constexpr wchar_t kTitle[] = L"Thần Long AUTO-PK v0.1.6 • sequence mouse lease • user mouse guard 5s";
++constexpr wchar_t kTitle[] = L"Thần Long AUTO-PK v0.1.7 • Action Library • Workflow Builder • global physical click executor";
+ constexpr wchar_t kGameModule[] = L"GameAssembly.dll";
+ constexpr int kLauLanMapId = 5;
+ constexpr int kDoThanhDangNpcId = 339;
+@@ -64,13 +65,44 @@
+ constexpr int IDC_MAIN_MAP = 126;
+ constexpr int IDC_CONFIRM_SECONDS = 127;
+ constexpr int IDC_SAVE_CONFIRM_ACCOUNT = 128;
+-constexpr int IDC_CLICK_LIST = 130;
+-constexpr int IDC_CAPTURE_CLICK = 131;
+-constexpr int IDC_TEST_CLICK = 132;
+-constexpr int IDC_CLICK_ROW_DELAY = 133;
+-constexpr int IDC_CLICK_ROW_REPEAT = 134;
+-constexpr int IDC_SAVE_CLICK_ROW = 135;
+-constexpr int IDC_LOG = 140;
++constexpr int IDC_ACTION_LIST = 130;
++constexpr int IDC_ACTION_NAME = 131;
++constexpr int IDC_ACTION_ADD = 132;
++constexpr int IDC_ACTION_SAVE = 133;
++constexpr int IDC_ACTION_DELETE = 134;
++constexpr int IDC_ACTION_BEFORE = 135;
++constexpr int IDC_ACTION_AFTER = 136;
++constexpr int IDC_ACTION_REPEAT = 137;
++constexpr int IDC_ACTION_REPEAT_GAP = 138;
++constexpr int IDC_ACTION_ATOMIC = 139;
++constexpr int IDC_ACTION_ACCOUNT_OVERRIDE = 140;
++
++constexpr int IDC_STEP_LIST = 150;
++constexpr int IDC_STEP_NAME = 151;
++constexpr int IDC_STEP_ADD = 152;
++constexpr int IDC_STEP_SAVE = 153;
++constexpr int IDC_STEP_DELETE = 154;
++constexpr int IDC_STEP_UP = 155;
++constexpr int IDC_STEP_DOWN = 156;
++constexpr int IDC_STEP_CAPTURE = 157;
++constexpr int IDC_STEP_TEST = 158;
++constexpr int IDC_STEP_BEFORE = 159;
++constexpr int IDC_STEP_AFTER = 160;
++constexpr int IDC_STEP_REPEAT = 161;
++constexpr int IDC_STEP_REPEAT_GAP = 162;
++
++constexpr int IDC_WORKFLOW_LIST = 170;
++constexpr int IDC_WORKFLOW_NAME = 171;
++constexpr int IDC_WORKFLOW_ADD = 172;
++constexpr int IDC_WORKFLOW_SAVE = 173;
++constexpr int IDC_WORKFLOW_DELETE = 174;
++constexpr int IDC_WORKFLOW_ADD_ACTION = 175;
++constexpr int IDC_WORKFLOW_REMOVE = 176;
++constexpr int IDC_WORKFLOW_UP = 177;
++constexpr int IDC_WORKFLOW_DOWN = 178;
++constexpr int IDC_WORKFLOW_RUN = 179;
++constexpr int IDC_CAPTURE_CONFIRM_ACCOUNT = 180;
++constexpr int IDC_LOG = 190;
+ 
+ constexpr std::size_t kScreenSlotCount = 16;
+ const std::array<const wchar_t*, kScreenSlotCount> kSlotKeys = {
+@@ -122,8 +154,62 @@
+     int baseH = 0;
+     bool valid = false;
+     bool enabled = true;
+-    int delayMs = kDefaultClickDelayMs;
++    int beforeDelayMs = 0;
++    int delayMs = kDefaultClickDelayMs; // delay after row
+     int repeat = 1;
++    int repeatGapMs = 250;
++};
++
++struct ActionStep {
++    std::wstring name;
++    ScreenPoint point{};
++};
++
++struct NamedAction {
++    int id = 0;
++    std::wstring name;
++    int beforeDelayMs = 0;
++    int afterDelayMs = 0;
++    int repeat = 1;
++    int repeatGapMs = 250;
++    bool atomicLease = true;
++    bool useAccountPointOverride = false;
++    std::vector<ActionStep> steps{};
++};
++
++struct WorkflowDefinition {
++    int id = 0;
++    std::wstring name;
++    bool reserved = false;
++    std::vector<int> actionIds{};
++};
++
++struct AutomationModel {
++    std::vector<NamedAction> actions{};
++    std::vector<WorkflowDefinition> workflows{};
++    int nextActionId = 1;
++    int nextWorkflowId = 1;
++    int reviveWorkflowId = 0;
++    int recoveryWorkflowId = 0;
++    int stageWorkflowId = 0;
++    int finalWorkflowId = 0;
++    int confirmWorkflowId = 0;
++};
++
++enum class ExecPurpose { None, Revive, Recovery, Stage, Final, Confirm, Manual };
++enum class ExecStage { BeginAction, BeginStep, ClickStep, FinishStep, FinishAction };
++
++struct ClickExecution {
++    bool active = false;
++    ExecPurpose purpose = ExecPurpose::None;
++    ExecStage stage = ExecStage::BeginAction;
++    int workflowId = 0;
++    int workflowItemIndex = 0;
++    int actionRepeatIndex = 0;
++    int stepIndex = 0;
++    int stepRepeatIndex = 0;
++    DWORD nextTick = 0;
++    bool manual = false;
+ };
+ 
+ struct PeriodicConfirmConfig {
+@@ -194,6 +280,7 @@
+     bool confirmUiLatched = false;
+     int confirmRepeatDone = 0;
+     DWORD confirmNextTick = 0;
++    ClickExecution clickExec{};
+ 
+     // Tool-owned cross-map Confirm proof. Never click Confirm from elapsed time alone.
+     bool crossMapRouteOwned = false;
+@@ -349,6 +436,225 @@
+     FlushIni();
+ }
+ 
++
++ActionStep LegacyStep(const wchar_t* name, const ScreenPoint& source) {
++    ActionStep step{};
++    step.name = name;
++    step.point = source;
++    step.point.beforeDelayMs = 0;
++    step.point.repeatGapMs = std::max(0, source.delayMs);
++    return step;
++}
++
++NamedAction MakeAction(int id, const wchar_t* name, std::initializer_list<ActionStep> steps,
++                       bool accountOverride = false) {
++    NamedAction action{};
++    action.id = id;
++    action.name = name;
++    action.useAccountPointOverride = accountOverride;
++    action.steps.assign(steps.begin(), steps.end());
++    return action;
++}
++
++AutomationModel BuildDefaultAutomationModel(const SharedSettings& legacy) {
++    AutomationModel m{};
++    int aid = 1;
++    const int reviveId = aid++;
++    const int confirmId = aid++;
++    const int treatId = aid++;
++    const int buffId = aid++;
++    const int closeTreatId = aid++;
++    const int pkAllianceId = aid++;
++    const int autoPkId = aid++;
++    const int autoTrainId = aid++;
++
++    m.actions.push_back(MakeAction(reviveId, L"ĐẦU THAI", {
++        LegacyStep(kSlotLabels[kReviveSlot], legacy.clicks[kReviveSlot])
++    }));
++    m.actions.push_back(MakeAction(confirmId, L"XÁC NHẬN RA MAP", {
++        LegacyStep(kSlotLabels[kSemanticConfirmSlot], legacy.clicks[kSemanticConfirmSlot])
++    }, true));
++    m.actions.push_back(MakeAction(treatId, L"TRỊ LIỆU", {
++        LegacyStep(kSlotLabels[2], legacy.clicks[2]),
++        LegacyStep(kSlotLabels[3], legacy.clicks[3]),
++        LegacyStep(kSlotLabels[4], legacy.clicks[4]),
++        LegacyStep(kSlotLabels[5], legacy.clicks[5])
++    }));
++    m.actions.push_back(MakeAction(buffId, L"BUFF", {
++        LegacyStep(kSlotLabels[6], legacy.clicks[6])
++    }));
++    m.actions.push_back(MakeAction(closeTreatId, L"ĐÓNG BẢNG TRỊ LIỆU", {
++        LegacyStep(kSlotLabels[7], legacy.clicks[7]),
++        LegacyStep(kSlotLabels[8], legacy.clicks[8]),
++        LegacyStep(kSlotLabels[9], legacy.clicks[9])
++    }));
++    m.actions.push_back(MakeAction(pkAllianceId, L"PK LIÊN MINH", {
++        LegacyStep(kSlotLabels[10], legacy.clicks[10]),
++        LegacyStep(kSlotLabels[11], legacy.clicks[11])
++    }));
++    m.actions.push_back(MakeAction(autoPkId, L"AUTO PK", {
++        LegacyStep(kSlotLabels[12], legacy.clicks[12]),
++        LegacyStep(kSlotLabels[13], legacy.clicks[13]),
++        LegacyStep(kSlotLabels[14], legacy.clicks[14])
++    }));
++    m.actions.push_back(MakeAction(autoTrainId, L"AUTO TRAIN", {
++        LegacyStep(kSlotLabels[15], legacy.clicks[15])
++    }));
++
++    int wid = 1;
++    WorkflowDefinition reviveW{wid++, L"FSM • HỒI SINH", true, {reviveId}};
++    WorkflowDefinition recoveryW{wid++, L"FSM • TRỊ LIỆU", true, {treatId}};
++    if (legacy.buffEnabled) recoveryW.actionIds.push_back(buffId);
++    recoveryW.actionIds.push_back(closeTreatId);
++    WorkflowDefinition stageW{wid++, L"FSM • PK LIÊN MINH", true, {pkAllianceId}};
++    WorkflowDefinition finalW{wid++, L"FSM • AUTO PK + TRAIN", true, {autoPkId, autoTrainId}};
++    WorkflowDefinition confirmW{wid++, L"FSM • XN RA MAP", true, {confirmId}};
++    m.reviveWorkflowId = reviveW.id;
++    m.recoveryWorkflowId = recoveryW.id;
++    m.stageWorkflowId = stageW.id;
++    m.finalWorkflowId = finalW.id;
++    m.confirmWorkflowId = confirmW.id;
++    m.workflows = {reviveW, recoveryW, stageW, finalW, confirmW};
++    m.nextActionId = aid;
++    m.nextWorkflowId = wid;
++    return m;
++}
++
++void SaveAutomationModel(const AutomationModel& m) {
++    EnsureUnicodeIni();
++    const std::wstring root = L"Automation";
++    WriteIniIntSection(root, L"Version", 1);
++    WriteIniIntSection(root, L"ActionCount", static_cast<int>(m.actions.size()));
++    WriteIniIntSection(root, L"WorkflowCount", static_cast<int>(m.workflows.size()));
++    WriteIniIntSection(root, L"NextActionId", std::max(1, m.nextActionId));
++    WriteIniIntSection(root, L"NextWorkflowId", std::max(1, m.nextWorkflowId));
++    WriteIniIntSection(root, L"ReviveWorkflowId", m.reviveWorkflowId);
++    WriteIniIntSection(root, L"RecoveryWorkflowId", m.recoveryWorkflowId);
++    WriteIniIntSection(root, L"StageWorkflowId", m.stageWorkflowId);
++    WriteIniIntSection(root, L"FinalWorkflowId", m.finalWorkflowId);
++    WriteIniIntSection(root, L"ConfirmWorkflowId", m.confirmWorkflowId);
++
++    for (std::size_t i = 0; i < m.actions.size(); ++i) {
++        const NamedAction& a = m.actions[i];
++        WriteIniIntSection(root, (L"ActionId" + std::to_wstring(i)).c_str(), a.id);
++        const std::wstring sec = L"Action." + std::to_wstring(a.id);
++        WritePrivateProfileStringW(sec.c_str(), L"Name", a.name.c_str(), ConfigPath().c_str());
++        WriteIniIntSection(sec, L"BeforeMs", std::clamp(a.beforeDelayMs, 0, 60000));
++        WriteIniIntSection(sec, L"AfterMs", std::clamp(a.afterDelayMs, 0, 60000));
++        WriteIniIntSection(sec, L"Repeat", std::clamp(a.repeat, 1, 100));
++        WriteIniIntSection(sec, L"RepeatGapMs", std::clamp(a.repeatGapMs, 0, 60000));
++        WriteIniIntSection(sec, L"AtomicLease", a.atomicLease ? 1 : 0);
++        WriteIniIntSection(sec, L"AccountPointOverride", a.useAccountPointOverride ? 1 : 0);
++        WriteIniIntSection(sec, L"StepCount", static_cast<int>(a.steps.size()));
++        for (std::size_t j = 0; j < a.steps.size(); ++j) {
++            const ActionStep& s = a.steps[j];
++            const ScreenPoint& p = s.point;
++            const std::wstring ssec = sec + L".Step." + std::to_wstring(j);
++            WritePrivateProfileStringW(ssec.c_str(), L"Name", s.name.c_str(), ConfigPath().c_str());
++            WriteIniIntSection(ssec, L"X", p.valid ? p.x : -1);
++            WriteIniIntSection(ssec, L"Y", p.valid ? p.y : -1);
++            WriteIniIntSection(ssec, L"W", p.valid ? p.baseW : 0);
++            WriteIniIntSection(ssec, L"H", p.valid ? p.baseH : 0);
++            WriteIniIntSection(ssec, L"Enabled", p.enabled ? 1 : 0);
++            WriteIniIntSection(ssec, L"BeforeMs", std::clamp(p.beforeDelayMs, 0, 60000));
++            WriteIniIntSection(ssec, L"AfterMs", std::clamp(p.delayMs, 0, 60000));
++            WriteIniIntSection(ssec, L"Repeat", std::clamp(p.repeat, 1, 100));
++            WriteIniIntSection(ssec, L"RepeatGapMs", std::clamp(p.repeatGapMs, 0, 60000));
++        }
++    }
++
++    for (std::size_t i = 0; i < m.workflows.size(); ++i) {
++        const WorkflowDefinition& w = m.workflows[i];
++        WriteIniIntSection(root, (L"WorkflowId" + std::to_wstring(i)).c_str(), w.id);
++        const std::wstring sec = L"Workflow." + std::to_wstring(w.id);
++        WritePrivateProfileStringW(sec.c_str(), L"Name", w.name.c_str(), ConfigPath().c_str());
++        WriteIniIntSection(sec, L"Reserved", w.reserved ? 1 : 0);
++        WriteIniIntSection(sec, L"ItemCount", static_cast<int>(w.actionIds.size()));
++        for (std::size_t j = 0; j < w.actionIds.size(); ++j)
++            WriteIniIntSection(sec, (L"ActionId" + std::to_wstring(j)).c_str(), w.actionIds[j]);
++    }
++    FlushIni();
++}
++
++AutomationModel LoadAutomationModel(const SharedSettings& legacy) {
++    const std::wstring root = L"Automation";
++    const int version = ReadIniIntSection(root, L"Version", 0);
++    const int actionCount = std::clamp(ReadIniIntSection(root, L"ActionCount", 0), 0, 500);
++    const int workflowCount = std::clamp(ReadIniIntSection(root, L"WorkflowCount", 0), 0, 200);
++    if (version <= 0 || actionCount <= 0 || workflowCount <= 0) {
++        AutomationModel migrated = BuildDefaultAutomationModel(legacy);
++        SaveAutomationModel(migrated);
++        return migrated;
++    }
++
++    AutomationModel m{};
++    m.nextActionId = std::max(1, ReadIniIntSection(root, L"NextActionId", 1));
++    m.nextWorkflowId = std::max(1, ReadIniIntSection(root, L"NextWorkflowId", 1));
++    m.reviveWorkflowId = ReadIniIntSection(root, L"ReviveWorkflowId", 0);
++    m.recoveryWorkflowId = ReadIniIntSection(root, L"RecoveryWorkflowId", 0);
++    m.stageWorkflowId = ReadIniIntSection(root, L"StageWorkflowId", 0);
++    m.finalWorkflowId = ReadIniIntSection(root, L"FinalWorkflowId", 0);
++    m.confirmWorkflowId = ReadIniIntSection(root, L"ConfirmWorkflowId", 0);
++
++    for (int i = 0; i < actionCount; ++i) {
++        const int id = ReadIniIntSection(root, (L"ActionId" + std::to_wstring(i)).c_str(), 0);
++        if (id <= 0) continue;
++        const std::wstring sec = L"Action." + std::to_wstring(id);
++        NamedAction a{};
++        a.id = id;
++        a.name = ReadIniStringSection(sec, L"Name");
++        if (a.name.empty()) a.name = L"ACTION " + std::to_wstring(id);
++        a.beforeDelayMs = std::clamp(ReadIniIntSection(sec, L"BeforeMs", 0), 0, 60000);
++        a.afterDelayMs = std::clamp(ReadIniIntSection(sec, L"AfterMs", 0), 0, 60000);
++        a.repeat = std::clamp(ReadIniIntSection(sec, L"Repeat", 1), 1, 100);
++        a.repeatGapMs = std::clamp(ReadIniIntSection(sec, L"RepeatGapMs", 250), 0, 60000);
++        a.atomicLease = ReadIniIntSection(sec, L"AtomicLease", 1) != 0;
++        a.useAccountPointOverride = ReadIniIntSection(sec, L"AccountPointOverride", 0) != 0;
++        const int stepCount = std::clamp(ReadIniIntSection(sec, L"StepCount", 0), 0, 500);
++        for (int j = 0; j < stepCount; ++j) {
++            const std::wstring ssec = sec + L".Step." + std::to_wstring(j);
++            ActionStep s{};
++            s.name = ReadIniStringSection(ssec, L"Name");
++            if (s.name.empty()) s.name = L"Bước " + std::to_wstring(j + 1);
++            ScreenPoint& p = s.point;
++            p.x = ReadIniIntSection(ssec, L"X", -1);
++            p.y = ReadIniIntSection(ssec, L"Y", -1);
++            p.baseW = ReadIniIntSection(ssec, L"W", 0);
++            p.baseH = ReadIniIntSection(ssec, L"H", 0);
++            p.valid = p.x >= 0 && p.y >= 0 && p.baseW > 0 && p.baseH > 0;
++            p.enabled = ReadIniIntSection(ssec, L"Enabled", 1) != 0;
++            p.beforeDelayMs = std::clamp(ReadIniIntSection(ssec, L"BeforeMs", 0), 0, 60000);
++            p.delayMs = std::clamp(ReadIniIntSection(ssec, L"AfterMs", kDefaultClickDelayMs), 0, 60000);
++            p.repeat = std::clamp(ReadIniIntSection(ssec, L"Repeat", 1), 1, 100);
++            p.repeatGapMs = std::clamp(ReadIniIntSection(ssec, L"RepeatGapMs", 250), 0, 60000);
++            a.steps.push_back(std::move(s));
++        }
++        m.actions.push_back(std::move(a));
++    }
++
++    for (int i = 0; i < workflowCount; ++i) {
++        const int id = ReadIniIntSection(root, (L"WorkflowId" + std::to_wstring(i)).c_str(), 0);
++        if (id <= 0) continue;
++        const std::wstring sec = L"Workflow." + std::to_wstring(id);
++        WorkflowDefinition w{};
++        w.id = id;
++        w.name = ReadIniStringSection(sec, L"Name");
++        if (w.name.empty()) w.name = L"WORKFLOW " + std::to_wstring(id);
++        w.reserved = ReadIniIntSection(sec, L"Reserved", 0) != 0;
++        const int itemCount = std::clamp(ReadIniIntSection(sec, L"ItemCount", 0), 0, 1000);
++        for (int j = 0; j < itemCount; ++j) {
++            const int aid = ReadIniIntSection(sec, (L"ActionId" + std::to_wstring(j)).c_str(), 0);
++            if (aid > 0) w.actionIds.push_back(aid);
++        }
++        m.workflows.push_back(std::move(w));
++    }
++    if (m.actions.empty() || m.workflows.empty()) {
++        m = BuildDefaultAutomationModel(legacy);
++        SaveAutomationModel(m);
++    }
++    return m;
++}
++
+ bool HasModule(DWORD pid, const wchar_t* name) {
+     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
+     if (snap == INVALID_HANDLE_VALUE) return false;
+@@ -501,14 +807,14 @@
+ class App {
+ public:
+     bool Create(HINSTANCE instance) {
+-        instance_ = instance; EnsureUnicodeIni(); settings_ = LoadSettings();
++        instance_ = instance; EnsureUnicodeIni(); settings_ = LoadSettings(); automation_ = LoadAutomationModel(settings_);
+         INITCOMMONCONTROLSEX ic{sizeof(ic), ICC_STANDARD_CLASSES | ICC_LISTVIEW_CLASSES}; InitCommonControlsEx(&ic);
+         WNDCLASSEXW wc{}; wc.cbSize = sizeof(wc); wc.lpfnWndProc = WndProc; wc.hInstance = instance_;
+         wc.hCursor = LoadCursor(nullptr, IDC_ARROW); wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+         wc.lpszClassName = L"ThanLongAutoPKWindow";
+         if (!RegisterClassExW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
+         hwnd_ = CreateWindowExW(0, wc.lpszClassName, kTitle, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+-                                CW_USEDEFAULT, CW_USEDEFAULT, 1080, 920, nullptr, nullptr, instance_, this);
++                                CW_USEDEFAULT, CW_USEDEFAULT, 1280, 1040, nullptr, nullptr, instance_, this);
+         return hwnd_ != nullptr;
+     }
+ 
+@@ -590,7 +896,7 @@
+         Make(L"BUTTON", L"QUÉT CLIENT", BS_PUSHBUTTON, 18, 200, 120, 30, IDC_SCAN);
+         Make(L"BUTTON", L"BẮT ĐẦU ACC TICK", BS_DEFPUSHBUTTON, 148, 200, 180, 30, IDC_START);
+         Make(L"BUTTON", L"DỪNG ACC TICK", BS_PUSHBUTTON, 338, 200, 155, 30, IDC_STOP);
+-        buffButton_ = Make(L"BUTTON", L"", BS_PUSHBUTTON, 505, 200, 210, 30, IDC_BUFF_TOGGLE);
++        buffButton_ = Make(L"STATIC", L"ACTION / WORKFLOW: cấu hình phía dưới", SS_CENTER | SS_CENTERIMAGE | WS_BORDER, 505, 200, 210, 30, 0);
+         selected_ = Make(L"STATIC", L"ACC ĐANG CHỈNH: chưa chọn", SS_LEFT | SS_CENTERIMAGE | WS_BORDER, 725, 200, 318, 30, IDC_SELECTED);
