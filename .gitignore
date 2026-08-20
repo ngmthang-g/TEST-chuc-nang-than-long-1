@@ -1,0 +1,8 @@
+build/
+base/
+v016/
+generated/
+vendor/
+package/
+*.zip
+SHA256_*.txt
