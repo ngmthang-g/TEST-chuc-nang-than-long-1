@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(ThanLongAutoPK VERSION 0.1.6 LANGUAGES CXX)
+project(ThanLongAutoPK VERSION 0.1.7 LANGUAGES CXX)
 
 if(NOT WIN32)
   message(FATAL_ERROR "ThanLongAutoPK is Windows-only")
