@@ -3,6 +3,8 @@ name: Build AUTO-PK v0.1.6 x64
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
