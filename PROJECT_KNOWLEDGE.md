@@ -53,10 +53,13 @@ Existing v0.1.5 bridge commands (`StartPath`, `StopPath`, ride toggle, `ClickNpc
 - Stage and Main keep independent MapID values.
 
 ## Runtime Status
-- SOURCE REVIEW: PASS
-- BUILD: pending/see CI
+- SOURCE REVIEW: **PASS**
+- BUILD: **PASS** — GitHub Actions Windows x64 validation run `32376966981`.
+- BUILD ARTIFACT: `ThanLongAutoPK-v0.1.6`, artifact ID `9409430656`.
+- RUNTIME ZIP SHA256: `3081db1ccfa35fe699e2b935a108ce6f793d748f9a7d1b635056f2299d56ec76`.
+- SOURCE ZIP SHA256: `27b98230f115b1f352c9bbcee5e6eef56a92585656e98ac2cd256d6a3ace0e60`.
 - RUNTIME: **UNTESTED**
-- KNOWN-GOOD: v0.1.5 business flow is inherited as the base; v0.1.6 click arbitration is not runtime-confirmed yet.
+- KNOWN-GOOD: v0.1.5 business flow is inherited as the base; v0.1.6 click arbitration is source/build-verified but not game-runtime-confirmed yet.
 
 ## Do-not-break notes
 - Do not turn `mouseLeasePid_` back into a blanket `TickAccount()` early-return for other PIDs.
@@ -71,3 +74,4 @@ Existing v0.1.5 bridge commands (`StartPath`, `StopPath`, ride toggle, `ClickNpc
 - `docs/features/CLICK_ENGINE.md`
 - `docs/decisions/DECISIONS.md`
 - `docs/reference/LOGIC_TABLE_ADAPTATION_v0.1.6.md`
+- `docs/CI_VALIDATION_v0.1.6.md`
