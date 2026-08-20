@@ -59,11 +59,15 @@ jobs:
       - name: Apply v0.1.6 physical-click arbitration patch
         shell: pwsh
         run: |
-          $patchHash = (Get-FileHash 'v016/patches/controller_v0.1.5_to_v0.1.6.patch' -Algorithm SHA256).Hash.ToLowerInvariant()
+          $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+          $patchText = [IO.File]::ReadAllText('v016/patches/controller_v0.1.5_to_v0.1.6.patch')
+          $patchText = $patchText.Replace("`r`n", "`n").Replace("`r", "`n")
+          [IO.File]::WriteAllText('v016-controller.patch', $patchText, $utf8NoBom)
+          $patchHash = (Get-FileHash 'v016-controller.patch' -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($patchHash -ne '63a6d5602b98760f8c2ebc57cf8316cc63a11e521ab086821d65ace8e7460a50') {
             throw "v0.1.6 patch mismatch: $patchHash"
           }
-          git apply --directory=generated/autopk 'v016/patches/controller_v0.1.5_to_v0.1.6.patch'
+          git apply --directory=generated/autopk 'v016-controller.patch'
           $controllerHash = (Get-FileHash 'generated/autopk/src/controller.cpp' -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($controllerHash -ne '8ec45d5762d5731cbe6d043aa8e28859a80dbca9bc10deac91458b9e911f919f') {
             throw "v0.1.6 controller mismatch: $controllerHash"
@@ -72,7 +76,6 @@ jobs:
           Copy-Item 'v016/README.md' 'generated/autopk/README.md' -Force
           Copy-Item 'v016/PROJECT_KNOWLEDGE.md' 'generated/autopk/PROJECT_KNOWLEDGE.md' -Force
           Copy-Item 'v016/CHANGELOG.md' 'generated/autopk/CHANGELOG.md' -Force
-          Remove-Item 'generated/autopk/docs' -Recurse -Force -ErrorAction SilentlyContinue
           Copy-Item 'v016/docs' 'generated/autopk/docs' -Recurse -Force
           Copy-Item 'base/vendor' 'generated/autopk/vendor' -Recurse -Force
           Write-Host "v0.1.6 controller verified: $controllerHash"
