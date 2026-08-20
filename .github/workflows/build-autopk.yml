@@ -1,4 +1,4 @@
-name: Build AUTO-PK v0.1.6 x64
+name: Build AUTO-PK v0.1.7 x64
 
 on:
   push:
@@ -14,10 +14,10 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - name: Checkout v0.1.6 patch repository
+      - name: Checkout v0.1.7 patch repository
         uses: actions/checkout@v4
         with:
-          path: v016
+          path: v017
 
       - name: Checkout pinned v0.1.5 lineage repository
         uses: actions/checkout@v4
@@ -62,7 +62,7 @@ jobs:
         shell: pwsh
         run: |
           $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-          $patchText = [IO.File]::ReadAllText('v016/patches/controller_v0.1.5_to_v0.1.6.patch')
+          $patchText = [IO.File]::ReadAllText('v017/patches/controller_v0.1.5_to_v0.1.6.patch')
           $patchText = $patchText.Replace("`r`n", "`n").Replace("`r", "`n")
           [IO.File]::WriteAllText('v016-controller.patch', $patchText, $utf8NoBom)
           $patchHash = (Get-FileHash 'v016-controller.patch' -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -76,13 +76,35 @@ jobs:
           if ($controllerHash -ne '8ec45d5762d5731cbe6d043aa8e28859a80dbca9bc10deac91458b9e911f919f') {
             throw "v0.1.6 controller mismatch: $controllerHash"
           }
-          Copy-Item 'v016/CMakeLists.txt' 'generated/autopk/CMakeLists.txt' -Force
-          Copy-Item 'v016/README.md' 'generated/autopk/README.md' -Force
-          Copy-Item 'v016/PROJECT_KNOWLEDGE.md' 'generated/autopk/PROJECT_KNOWLEDGE.md' -Force
-          Copy-Item 'v016/CHANGELOG.md' 'generated/autopk/CHANGELOG.md' -Force
-          Copy-Item 'v016/docs' 'generated/autopk/docs' -Recurse -Force
-          Copy-Item 'base/vendor' 'generated/autopk/vendor' -Recurse -Force
           Write-Host "v0.1.6 controller verified: $controllerHash"
+
+      - name: Apply v0.1.7 Action Library + Workflow Builder patch
+        shell: pwsh
+        run: |
+          $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+          $patchParts = Get-ChildItem 'v017/patches/v017/controller.part*' | Sort-Object Name
+          if ($patchParts.Count -lt 1) { throw "Missing v0.1.7 patch parts" }
+          $patchText = ($patchParts | ForEach-Object { [IO.File]::ReadAllText($_.FullName) }) -join ''
+          $patchText = $patchText.Replace("`r`n", "`n").Replace("`r", "`n")
+          [IO.File]::WriteAllText('v017-controller.patch', $patchText, $utf8NoBom)
+          $patchHash = (Get-FileHash 'v017-controller.patch' -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($patchHash -ne '7b9631059162fe9ed912abf4ee3ab87773bb3e3260d24b9004b05bf52a74f4c7') {
+            throw "v0.1.7 patch mismatch: $patchHash"
+          }
+          git apply --directory=generated/autopk 'v017-controller.patch'
+          $controllerText = [IO.File]::ReadAllText('generated/autopk/src/controller.cpp').Replace("`r`n", "`n").Replace("`r", "`n")
+          [IO.File]::WriteAllText('generated/autopk/src/controller.cpp', $controllerText, $utf8NoBom)
+          $controllerHash = (Get-FileHash 'generated/autopk/src/controller.cpp' -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($controllerHash -ne 'a76334d6f1d0698d6482b6ff6cbd5a7108a359a02386c7ebf32b2046c5eed909') {
+            throw "v0.1.7 controller mismatch: $controllerHash"
+          }
+          Copy-Item 'v017/CMakeLists.txt' 'generated/autopk/CMakeLists.txt' -Force
+          Copy-Item 'v017/README.md' 'generated/autopk/README.md' -Force
+          Copy-Item 'v017/PROJECT_KNOWLEDGE.md' 'generated/autopk/PROJECT_KNOWLEDGE.md' -Force
+          Copy-Item 'v017/CHANGELOG.md' 'generated/autopk/CHANGELOG.md' -Force
+          Copy-Item 'v017/docs' 'generated/autopk/docs' -Recurse -Force
+          Copy-Item 'base/vendor' 'generated/autopk/vendor' -Recurse -Force
+          Write-Host "v0.1.7 controller verified: $controllerHash"
 
       - name: Configure x64
         shell: pwsh
@@ -101,29 +123,29 @@ jobs:
       - name: Package runtime and reconstructed source
         shell: pwsh
         run: |
-          $runtime = 'package/ThanLongAutoPK-v0.1.6-win-x64'
+          $runtime = 'package/ThanLongAutoPK-v0.1.7-win-x64'
           New-Item -ItemType Directory -Force $runtime | Out-Null
           Copy-Item 'build/Release/ThanLongAutoPK.exe' $runtime/
           Copy-Item 'build/Release/ThanLongCleanRouteBridge.dll' $runtime/
           Copy-Item 'generated/autopk/README.md' $runtime/
           Copy-Item 'generated/autopk/PROJECT_KNOWLEDGE.md' $runtime/
           Copy-Item 'generated/autopk/CHANGELOG.md' $runtime/
-          Compress-Archive -Path "$runtime/*" -DestinationPath 'ThanLongAutoPK-v0.1.6-win-x64.zip' -Force
-          Compress-Archive -Path 'generated/autopk/*' -DestinationPath 'AutoPK_Source_v0.1.6.zip' -Force
-          $runtimeSha = (Get-FileHash 'ThanLongAutoPK-v0.1.6-win-x64.zip' -Algorithm SHA256).Hash.ToLowerInvariant()
-          $sourceSha = (Get-FileHash 'AutoPK_Source_v0.1.6.zip' -Algorithm SHA256).Hash.ToLowerInvariant()
+          Compress-Archive -Path "$runtime/*" -DestinationPath 'ThanLongAutoPK-v0.1.7-win-x64.zip' -Force
+          Compress-Archive -Path 'generated/autopk/*' -DestinationPath 'AutoPK_Source_v0.1.7.zip' -Force
+          $runtimeSha = (Get-FileHash 'ThanLongAutoPK-v0.1.7-win-x64.zip' -Algorithm SHA256).Hash.ToLowerInvariant()
+          $sourceSha = (Get-FileHash 'AutoPK_Source_v0.1.7.zip' -Algorithm SHA256).Hash.ToLowerInvariant()
           @(
-            "$runtimeSha  ThanLongAutoPK-v0.1.6-win-x64.zip",
-            "$sourceSha  AutoPK_Source_v0.1.6.zip"
-          ) | Set-Content 'SHA256_v0.1.6.txt' -Encoding ascii
+            "$runtimeSha  ThanLongAutoPK-v0.1.7-win-x64.zip",
+            "$sourceSha  AutoPK_Source_v0.1.7.zip"
+          ) | Set-Content 'SHA256_v0.1.7.txt' -Encoding ascii
 
       - name: Upload Windows x64 + source artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ThanLongAutoPK-v0.1.6
+          name: ThanLongAutoPK-v0.1.7
           path: |
-            ThanLongAutoPK-v0.1.6-win-x64.zip
-            AutoPK_Source_v0.1.6.zip
-            SHA256_v0.1.6.txt
+            ThanLongAutoPK-v0.1.7-win-x64.zip
+            AutoPK_Source_v0.1.7.zip
+            SHA256_v0.1.7.txt
           if-no-files-found: error
           retention-days: 90
