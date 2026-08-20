@@ -1,0 +1,342 @@
+--- a/src/controller.cpp
++++ b/src/controller.cpp
+@@ -17,7 +17,7 @@
+ 
+ namespace {
+ 
+-constexpr wchar_t kTitle[] = L"Thần Long AUTO-PK v0.1.5 • click-only mouse lease • per-account confirm timer";
++constexpr wchar_t kTitle[] = L"Thần Long AUTO-PK v0.1.6 • sequence mouse lease • user mouse guard 5s";
+ constexpr wchar_t kGameModule[] = L"GameAssembly.dll";
+ constexpr int kLauLanMapId = 5;
+ constexpr int kDoThanhDangNpcId = 339;
+@@ -30,6 +30,8 @@
+ constexpr UINT kWindowResponsiveProbeMs = 120;
+ constexpr DWORD kMouseSettleMs = 100;
+ constexpr DWORD kMouseHoldMs = 140;
++constexpr DWORD kUserMouseGuardMs = 5000;
++constexpr DWORD kOwnMouseIgnoreMs = 1500;
+ constexpr DWORD kRouteCommandCooldownMs = 1500;
+ constexpr DWORD kStartPathCooldownMs = 5000;
+ constexpr DWORD kRideCooldownMs = 4000;
+@@ -522,6 +524,52 @@
+         return self ? self->Handle(msg, wp, lp) : DefWindowProcW(hwnd, msg, wp, lp);
+     }
+ 
++    static LRESULT CALLBACK MouseHookProc(int code, WPARAM wp, LPARAM lp) {
++        App* self = mouseHookOwner_;
++        if (code == HC_ACTION && self && lp) {
++            const auto* info = reinterpret_cast<const MSLLHOOKSTRUCT*>(lp);
++            self->ObservePhysicalMouse(wp, *info);
++        }
++        return CallNextHookEx(self ? self->mouseHook_ : nullptr, code, wp, lp);
++    }
++
++    void ObservePhysicalMouse(WPARAM wp, const MSLLHOOKSTRUCT& info) {
++        if (info.flags & LLMHF_INJECTED) return;
++        const DWORD now = GetTickCount();
++        if (ownMouseIgnoreUntilTick_ && static_cast<LONG>(now - ownMouseIgnoreUntilTick_) < 0) return;
++        switch (wp) {
++            case WM_MOUSEMOVE:
++            case WM_LBUTTONDOWN:
++            case WM_LBUTTONUP:
++            case WM_RBUTTONDOWN:
++            case WM_RBUTTONUP:
++            case WM_MBUTTONDOWN:
++            case WM_MBUTTONUP:
++            case WM_MOUSEWHEEL:
++            case WM_MOUSEHWHEEL:
++            case WM_XBUTTONDOWN:
++            case WM_XBUTTONUP:
++                lastPhysicalMouseTick_ = now;
++                break;
++        }
++    }
++
++    bool UserMouseGuardActive(DWORD now, DWORD* remainingMs = nullptr) const {
++        if (!lastPhysicalMouseTick_) return false;
++        const DWORD elapsed = now - lastPhysicalMouseTick_;
++        if (elapsed >= kUserMouseGuardMs) return false;
++        if (remainingMs) *remainingMs = kUserMouseGuardMs - elapsed;
++        return true;
++    }
++
++    bool AllowAutomaticClick(Account& a, const std::wstring& reason, bool manual) {
++        if (manual) return true;
++        DWORD remain = 0;
++        if (!UserMouseGuardActive(GetTickCount(), &remain)) return true;
++        a.runtime.status = L"CHUỘT TAY • hoãn auto-click " + std::to_wstring((remain + 999) / 1000) + L"s • " + reason;
++        return false;
++    }
++
+     HWND Make(const wchar_t* cls, const wchar_t* text, DWORD style, int x, int y, int w, int h, int id) {
+         HWND out = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | style, x, y, w, h, hwnd_,
+                                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), instance_, nullptr);
+@@ -589,13 +637,16 @@
+         Make(L"STATIC", L"Lặp", 0, 982, 552, 35, 24, 0);
+         clickRowRepeat_ = Make(L"EDIT", L"1", WS_BORDER | ES_NUMBER | ES_CENTER, 1018, 549, 25, 27, IDC_CLICK_ROW_REPEAT);
+         Make(L"BUTTON", L"LƯU DELAY / LẶP DÒNG", BS_PUSHBUTTON, 775, 586, 268, 32, IDC_SAVE_CLICK_ROW);
+-        Make(L"STATIC", L"F4 = pause/resume. DEAD mới hồi sinh. PHỤ: PK + Liên minh chạy NGAY. ALL PHỤ READY mới route CHÍNH. CHÍNH: Auto → PK → Auto → Train.", 0, 775, 628, 268, 82, 0);
++        Make(L"STATIC", L"F4 = pause/resume. Click vật lý: 1 ACC giữ lease cả chuỗi; acc khác vẫn route/state. Chuột tay sẽ hoãn auto-click 5s. PHỤ: PK + Liên minh. CHÍNH: Auto → PK → Auto → Train.", 0, 775, 628, 268, 82, 0);
+         Make(L"STATIC", L"LOG", 0, 18, 724, 40, 22, 0);
+         log_ = Make(L"EDIT", L"", WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_VSCROLL, 18, 748, 1025, 120, IDC_LOG);
+ 
+         LoadSettingsToUi(); RefreshMapProfiles(); RefreshClickList(); UpdateBuffButton();
+         if (!RegisterHotKey(hwnd_, kCaptureHotkeyId, MOD_NOREPEAT, VK_F8)) Log(L"CẢNH BÁO: không đăng ký được F8.");
+         if (!RegisterHotKey(hwnd_, kPauseHotkeyId, MOD_NOREPEAT, VK_F4)) Log(L"CẢNH BÁO: không đăng ký được F4.");
++        mouseHookOwner_ = this;
++        mouseHook_ = SetWindowsHookExW(WH_MOUSE_LL, MouseHookProc, GetModuleHandleW(nullptr), 0);
++        if (!mouseHook_) Log(L"CẢNH BÁO: không cài được User Mouse Guard; auto-click vẫn có sequence lease.");
+         SetTimer(hwnd_, kTimer, kTimerMs, nullptr);
+         ScanClients();
+     }
+@@ -896,6 +947,7 @@
+         if (!IsWindow(a.game.window) || !IsWindowVisible(a.game.window)) { error = L"Cửa sổ game không visible"; return false; }
+         if (IsIconic(a.game.window)) { error = L"Cửa sổ game minimized"; return false; }
+         POINT screen = clientPoint; if (!ClientToScreen(a.game.window, &screen)) { error = L"ClientToScreen fail"; return false; }
++        ownMouseIgnoreUntilTick_ = GetTickCount() + kOwnMouseIgnoreMs;
+         const DWORD selfTid = GetCurrentThreadId(); bool attached = false;
+         if (a.game.threadId && a.game.threadId != selfTid) attached = AttachThreadInput(selfTid, a.game.threadId, TRUE) != FALSE;
+         (void)SetForegroundWindow(a.game.window); (void)BringWindowToTop(a.game.window); Sleep(kMouseSettleMs);
+@@ -913,21 +965,29 @@
+     bool AcquireMouseLease(Account& a, const std::wstring& reason) {
+         if (mouseLeasePid_ && mouseLeasePid_ != a.game.pid) return false;
+         if (!mouseLeasePid_) {
+-            mouseLeasePid_ = a.game.pid; SetText(status_, L"BĐPT: FREEZE ALL • CLICK LEASE → " + Tag(a) + L" • " + reason);
+-            LogAccount(a, L"BĐPT GIỮ CLICK LEASE • FREEZE ALL • " + reason);
++            mouseLeasePid_ = a.game.pid;
++            SetText(status_, L"CLICK LEASE → " + Tag(a) + L" • " + reason);
++            LogAccount(a, L"GIỮ CLICK SEQUENCE LEASE • " + reason);
+         }
+         return true;
+     }
+ 
+     void ReleaseMouseLease(const std::wstring& reason) {
+         if (!mouseLeasePid_) return;
+-        Account* a = AccountByPid(mouseLeasePid_); if (a) LogAccount(*a, L"BĐPT NHẢ CLICK LEASE • UNFREEZE ALL • " + reason);
+-        mouseLeasePid_ = 0; SetText(status_, L"BĐPT: UNFREEZE ALL • " + reason);
++        Account* a = AccountByPid(mouseLeasePid_);
++        if (a) LogAccount(*a, L"NHẢ CLICK SEQUENCE LEASE • " + reason);
++        mouseLeasePid_ = 0;
++        SetText(status_, L"CLICK LEASE FREE • " + reason);
+     }
+ 
+-    bool ClickSlot(Account& a, std::size_t slot, const std::wstring& reason) {
++    bool ClickSlot(Account& a, std::size_t slot, const std::wstring& reason,
++                   bool retainLease = false, bool manual = false) {
+         if (slot >= kScreenSlotCount) return false;
+-        if (!AcquireMouseLease(a, reason)) return false;
++        if (!AllowAutomaticClick(a, reason, manual)) return false;
++        if (!AcquireMouseLease(a, reason)) {
++            a.runtime.status = L"CHỜ CLICK LEASE • PID " + std::to_wstring(mouseLeasePid_) + L" đang chạy chuỗi click";
++            return false;
++        }
+         POINT p{}; std::wstring error;
+         if (!ScaleClickPoint(a.game, settings_.clicks[slot], p, error)) {
+             LogAccount(a, L"CLICK " + std::wstring(kSlotLabels[slot]) + L" FAIL: " + error);
+@@ -937,24 +997,32 @@
+         const bool ok = PerformRealInputClickDirect(a, p, error);
+         if (ok) LogAccount(a, L"REAL CLICK " + std::wstring(kSlotLabels[slot]) + L" → " + std::to_wstring(p.x) + L"," + std::to_wstring(p.y));
+         else LogAccount(a, L"REAL CLICK FAIL: " + error);
+-        // Critical invariant: lease covers only the physical foreground/cursor/down/up click.
+-        // Row delay/repeat wait NEVER owns the mouse, so another account can click immediately.
+-        ReleaseMouseLease(ok ? L"click xong" : L"click fail");
++
++        // v0.1.6 invariant:
++        // - single click users (periodic Confirm/manual test) release after mouse-up;
++        // - Recovery/Stage/Final/revive groups may retain the global lease across delay/repeat,
++        //   so another window can never interleave an automatic click inside the active sequence.
++        // Read-only scanner/FSM/route/bridge work is NOT blocked by this lease.
++        if (!ok || !retainLease) ReleaseMouseLease(ok ? L"single click xong" : L"click fail");
+         return ok;
+     }
+ 
+-    bool ClickPeriodicConfirmPoint(Account& a, const std::wstring& reason) {
+-        if (!AcquireMouseLease(a, reason)) return false;
++    bool ClickPeriodicConfirmPoint(Account& a, const std::wstring& reason, bool manual = false) {
++        if (!AllowAutomaticClick(a, reason, manual)) return false;
++        if (!AcquireMouseLease(a, reason)) {
++            a.runtime.status = L"XN MAP chờ CLICK LEASE • PID " + std::to_wstring(mouseLeasePid_) + L" đang chạy chuỗi";
++            return false;
++        }
+         POINT p{}; std::wstring error;
+         if (!ScaleClickPoint(a.game, a.periodicConfirm.point, p, error)) {
+             LogAccount(a, L"CLICK XÁC NHẬN MAP ACC FAIL: " + error);
+-            ReleaseMouseLease(L"click fail");
++            ReleaseMouseLease(L"XN MAP click fail");
+             return false;
+         }
+         const bool ok = PerformRealInputClickDirect(a, p, error);
+         if (ok) LogAccount(a, L"REAL CLICK XÁC NHẬN MAP ACC → " + std::to_wstring(p.x) + L"," + std::to_wstring(p.y));
+         else LogAccount(a, L"REAL CLICK XÁC NHẬN MAP ACC FAIL: " + error);
+-        ReleaseMouseLease(ok ? L"XN MAP click xong" : L"XN MAP click fail");
++        ReleaseMouseLease(ok ? L"XN MAP single click xong" : L"XN MAP click fail");
+         return ok;
+     }
+ 
+@@ -972,7 +1040,9 @@
+             return false;
+         }
+         if (static_cast<LONG>(now - a.runtime.nextPeriodicConfirmTick) < 0) return false;
+-        if (mouseLeasePid_ && mouseLeasePid_ != a.game.pid) return false;
++        // Periodic Confirm is a single physical click and must never cut into another
++        // account's retained sequence lease (or this account's own active sequence).
++        if (mouseLeasePid_) return false;
+ 
+         const bool ok = ClickPeriodicConfirmPoint(a, L"TIMER XN MAP theo ACC");
+         a.runtime.lastConfirmClick = now;
+@@ -1209,16 +1279,19 @@
+     }
+ 
+     if (!revive.enabled) {
++        if (mouseLeasePid_ == a.game.pid) ReleaseMouseLease(L"revive disabled");
+         a.runtime.status = L"CHẾT • dòng HỒI SINH/ĐẦU THAI đang BỎ QUA";
+         return true;
+     }
+     if (!revive.valid) {
++        if (mouseLeasePid_ == a.game.pid) ReleaseMouseLease(L"revive thiếu tọa");
+         a.runtime.status = L"CHẾT • thiếu tọa HỒI SINH/ĐẦU THAI";
+         return true;
+     }
+ 
+     const int repeat = std::max(1, revive.repeat);
+     if (a.runtime.reviveRepeatDone >= repeat) {
++        if (mouseLeasePid_ == a.game.pid) ReleaseMouseLease(L"revive click group xong");
+         a.runtime.status = L"Đã click HỒI SINH đủ " + std::to_wstring(repeat) + L" lần • chờ ALIVE authoritative";
+         return true;
+     }
+@@ -1227,12 +1300,14 @@
+         return true;
+     }
+ 
+-    if (ClickSlot(a, kReviveSlot, L"dead=1 authoritative")) {
++    if (ClickSlot(a, kReviveSlot, L"dead=1 authoritative", true)) {
+         ++a.runtime.reviveRepeatDone;
+         a.runtime.lastReviveClick = now;
+         a.runtime.reviveNextTick = now + static_cast<DWORD>(std::max(0, revive.delayMs));
+         a.runtime.status = L"HỒI SINH/ĐẦU THAI " + std::to_wstring(a.runtime.reviveRepeatDone) +
+             L"/" + std::to_wstring(repeat) + L" • chờ ALIVE";
++        if (a.runtime.reviveRepeatDone >= repeat && mouseLeasePid_ == a.game.pid)
++            ReleaseMouseLease(L"revive click group xong");
+     } else {
+         a.runtime.reviveNextTick = now + 1000;
+     }
+@@ -1265,13 +1340,17 @@
+             continue;
+         }
+         if (!step.valid) {
++            // Never strand the global click owner on a broken/missing row.
++            // The sequence index is preserved for retry after the user fixes the point,
++            // but other accounts must not starve forever behind an impossible click.
++            if (mouseLeasePid_ == a.game.pid) ReleaseMouseLease(L"sequence thiếu tọa click");
+             a.runtime.status = L"Thiếu tọa click: " + std::wstring(kSlotLabels[slot]);
+             return true;
+         }
+         if (now < a.runtime.sequenceNextTick) return true;
+ 
+         const int repeat = std::max(1, step.repeat);
+-        if (ClickSlot(a, slot, clickReason)) {
++        if (ClickSlot(a, slot, clickReason, true)) {
+             ++a.runtime.sequenceRepeatIndex;
+             a.runtime.sequenceNextTick = now + static_cast<DWORD>(std::max(0, step.delayMs));
+             a.runtime.status = std::wstring(kSlotLabels[slot]) + L" • lặp " +
+@@ -1292,6 +1371,7 @@
+     if (DriveSequenceRange(a, now, SequenceKind::Recovery, kRecoveryFirstSlot, kRecoveryLastSlot,
+                            L"RECOVERY NPC", L"Recovery sequence")) return true;
+ 
++    if (mouseLeasePid_ == a.game.pid) ReleaseMouseLease(L"Recovery sequence xong");
+     a.runtime.sequence = SequenceKind::None;
+     a.runtime.phase = Phase::RouteStaging;
+     a.runtime.phaseTick = now;
+@@ -1317,6 +1397,7 @@
+     if (DriveSequenceRange(a, now, SequenceKind::Stage, kStageFirstSlot, kStageLastSlot,
+                            L"PK + LIÊN MINH TẠI PHỤ", L"Stage PK/Alliance")) return true;
+ 
++    if (mouseLeasePid_ == a.game.pid) ReleaseMouseLease(L"Stage PK/Alliance sequence xong");
+     a.runtime.sequence = SequenceKind::None;
+     a.runtime.stagingReady = true;
+     a.runtime.phase = Phase::WaitStaging;
+@@ -1340,6 +1421,7 @@
+     if (DriveSequenceRange(a, now, SequenceKind::Final, kFinalFirstSlot, kFinalLastSlot,
+                            L"AUTO-PK-AUTO-TRAIN TẠI CHÍNH", L"Final Auto/PK/Train")) return true;
+ 
++    if (mouseLeasePid_ == a.game.pid) ReleaseMouseLease(L"Final Auto/PK/Train sequence xong");
+     a.runtime.sequence = SequenceKind::None;
+     a.runtime.phase = Phase::VerifyFinalAuto;
+     a.runtime.phaseTick = now;
+@@ -1413,17 +1495,19 @@
+     if (!a.runtime.running) return;
+     if (globalPaused_) { a.runtime.status = L"F4 PAUSE • chỉ đọc snapshot"; return; }
+ 
+-    // XÁC NHẬN MAP v0.1.5: timer theo từng acc, chỉ dựa vào thời gian + tọa độ người dùng gán.
++    // XÁC NHẬN MAP v0.1.6: giữ timer theo từng acc của v0.1.5; vẫn là click vật lý, nhưng phải chờ global sequence lease.
+     // Không cần ValidConfirmUi/MessageBox/MapID hay bất kỳ snapshot proof nào để quyết định click.
+     if (DrivePeriodicConfirm(a, now)) return;
+     if (!a.snapshotValid) { a.runtime.status = L"XN MAP timer vẫn độc lập • logic còn lại chờ snapshot"; return; }
+ 
+     if (HandleDeath(a, now)) return;
+-    if (mouseLeasePid_ && mouseLeasePid_ != a.game.pid) {
+-        a.runtime.status = L"FREEZE BĐPT • PID " + std::to_wstring(mouseLeasePid_) + L" đang chiếm chuột";
++
++    // v0.1.6: click lease is NOT a scheduler-wide freeze. Other accounts keep
++    // scanner/FSM/route/bridge progress; only physical auto-click acquisition is serialized.
++    if (HoldUntilStable(a, now)) {
++        if (mouseLeasePid_ == a.game.pid) ReleaseMouseLease(L"client freeze/safety");
+         return;
+     }
+-    if (HoldUntilStable(a, now)) return;
+ 
+     if (rallyActive_ &&
+         (a.runtime.phase == Phase::Monitor || a.runtime.phase == Phase::RouteMain ||
+@@ -1690,7 +1774,7 @@
+         const DWORD now = GetTickCount();
+         for (auto& p : accounts_) if (p->runtime.running || p.get() == SelectedAccount()) (void)ReadState(*p, now);
+         for (auto& p : accounts_) TickAccount(*p, now);
+-        if (rallyActive_ && AllRunningAtStaging() && !mouseLeasePid_) ReleaseBarrierToMain(now);
++        if (rallyActive_ && AllRunningAtStaging()) ReleaseBarrierToMain(now);
+         for (int i = 0; i < static_cast<int>(accounts_.size()); ++i) UpdateRow(i, *accounts_[static_cast<std::size_t>(i)]);
+         UpdateSelectedLive();
+     }
+@@ -1769,11 +1853,15 @@
+     void TestSelectedClick() {
+         const int row = SelectedClickRow(); Account* a = SelectedAccount();
+         if (row < 0 || row >= static_cast<int>(kScreenSlotCount) || !a) { Log(L"TEST: chọn acc + dòng click."); return; }
++        if (mouseLeasePid_) {
++            Log(L"TEST: đang có AUTO CLICK SEQUENCE LEASE ở PID " + std::to_wstring(mouseLeasePid_) + L"; F4 pause hoặc chờ chuỗi kết thúc để test, tránh chen click.");
++            return;
++        }
+         if (static_cast<std::size_t>(row) == kSemanticConfirmSlot) {
+-            (void)ClickPeriodicConfirmPoint(*a, L"TEST XN MAP ACC");
++            (void)ClickPeriodicConfirmPoint(*a, L"TEST XN MAP ACC", true);
+             return;
+         }
+-        (void)ClickSlot(*a, static_cast<std::size_t>(row), L"TEST MANUAL");
++        (void)ClickSlot(*a, static_cast<std::size_t>(row), L"TEST MANUAL", false, true);
+     }
+ 
+     void ToggleBuff() { settings_.buffEnabled = !settings_.buffEnabled; SaveSettings(settings_); UpdateBuffButton(); Log(settings_.buffEnabled ? L"BUFF SAU TRỊ LIỆU = BẬT" : L"BUFF SAU TRỊ LIỆU = TẮT"); }
+@@ -1839,7 +1927,13 @@
+                 break;
+             }
+             case WM_DESTROY:
+-                KillTimer(hwnd_, kTimer); UnregisterHotKey(hwnd_, kCaptureHotkeyId); UnregisterHotKey(hwnd_, kPauseHotkeyId); PostQuitMessage(0); return 0;
++                KillTimer(hwnd_, kTimer);
++                UnregisterHotKey(hwnd_, kCaptureHotkeyId);
++                UnregisterHotKey(hwnd_, kPauseHotkeyId);
++                if (mouseHook_) { UnhookWindowsHookEx(mouseHook_); mouseHook_ = nullptr; }
++                if (mouseHookOwner_ == this) mouseHookOwner_ = nullptr;
++                PostQuitMessage(0);
++                return 0;
+         }
+         return DefWindowProcW(hwnd_, msg, wp, lp);
+     }
+@@ -1853,6 +1947,10 @@
+     std::vector<std::unique_ptr<Account>> accounts_{};
+     bool globalPaused_ = false;
+     DWORD mouseLeasePid_ = 0;
++    HHOOK mouseHook_ = nullptr;
++    DWORD lastPhysicalMouseTick_ = 0;
++    DWORD ownMouseIgnoreUntilTick_ = 0;
++    inline static App* mouseHookOwner_ = nullptr;
+     bool rallyActive_ = false;
+     unsigned rallyGeneration_ = 0;
+     bool suppressClickNotify_ = false;
